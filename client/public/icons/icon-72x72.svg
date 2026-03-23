@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4c1d95"/>
+      <stop offset="100%" style="stop-color:#0c4a6e"/>
+    </linearGradient>
+    <linearGradient id="fg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#a855f7"/>
+      <stop offset="100%" style="stop-color:#38bdf8"/>
+    </linearGradient>
+  </defs>
+  <!-- Background rounded rect -->
+  <rect width="72" height="72" rx="14" fill="url(#bg)"/>
+  <!-- Eye outline (ellipse) -->
+  <ellipse cx="36" cy="36" rx="34" ry="19" stroke="url(#fg)" stroke-width="2" fill="none"/>
+  <!-- Iris circle -->
+  <circle cx="36" cy="36" r="12" stroke="url(#fg)" stroke-width="1" fill="url(#fg)" fill-opacity="0.2"/>
+  <!-- Pupil -->
+  <circle cx="36" cy="36" r="4" fill="url(#fg)"/>
+  <!-- EM text -->
+  <text x="36" y="61" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="9" font-weight="800" fill="url(#fg)">EM</text>
+</svg>
