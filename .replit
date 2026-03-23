@@ -1,11 +1,14 @@
-run = "npm start"
+run = "npm run build && npm start"
 entrypoint = "server/index.js"
 
 [nix]
 channel = "stable-23_11"
 
+[env]
+NODE_ENV = "production"
+
 [deployment]
-run = ["sh", "-c", "npm start"]
+run = ["sh", "-c", "npm run build && npm start"]
 deploymentTarget = "cloudrun"
 
 [[ports]]

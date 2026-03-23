@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 3000;
 // CORS configuration
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production'
-    ? [process.env.ALLOWED_ORIGIN || 'https://your-replit-domain.replit.app']
+    ? true  // Allow same-origin in production (Express serves the frontend)
     : ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
