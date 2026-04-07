@@ -47,6 +47,10 @@ Full-stack PWA for AI-powered iris photo merging. Express API + React 18 SPA (Vi
 
 Jest 30 with mocked dependencies. Tests live in `__tests__/` dirs adjacent to source. Pattern: mock the db adapter + auth middleware + validators, test route logic in isolation. No supertest — tests call route handlers directly with mock req/res. No client-side tests.
 
+## Workflow
+
+- Always commit and push when done with a change. Do not leave work as uncommitted local changes.
+
 ## Key Conventions
 
 - DB repository methods are **async** and return **plain objects** (not `{ data, error }` envelopes). Write errors throw; read misses return `null`.
