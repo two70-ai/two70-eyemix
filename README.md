@@ -9,26 +9,43 @@ EyeMix is a full-stack Progressive Web App that merges two iris photos using AI 
 - **Prompt Templates**: Admin-managed gallery of artistic styles with reference images
 - **Role-based Access**: Admin full control, Client paywall-protected view
 - **PWA**: Installable, offline-capable Progressive Web App
-- **Supabase Backend**: PostgreSQL database and image storage
+- **Dual Database Support**: Supabase (PostgreSQL) or SQLite for local development
 
 ## Tech Stack
 
 - **Frontend**: React 18 + Vite + Tailwind CSS + Framer Motion
 - **Backend**: Express.js REST API
-- **Database**: Supabase (PostgreSQL)
-- **Storage**: Supabase Storage
-- **AI**: NanoBanana API (configurable)
+- **Database**: Supabase (PostgreSQL) or SQLite — switchable via `DB_SOURCE` env var
+- **Storage**: Supabase Storage or local filesystem (auto-selected with database)
+- **AI**: Google Gemini 2.5 Flash Image (iris merging) + Imagen 4 (reference generation)
 - **Auth**: JWT with httpOnly cookies
-- **Deploy**: Replit (single `npm start`)
+- **Deploy**: Replit, or any Node.js host
 
 ## Setup
 
 1. Clone the repository
 2. Copy `.env.example` to `.env` and fill in your values
-3. Run database migrations in Supabase (see `supabase/migrations/`)
-4. Install dependencies: `npm install`
-5. Build frontend: `npm run build`
-6. Start server: `npm start`
+3. Install dependencies: `npm install`
+4. Build frontend: `npm run build`
+5. Start server: `npm start`
+
+### Quick Start with SQLite (no external services needed)
+
+```bash
+cp .env.example .env
+# Edit .env: set DB_SOURCE=sqlite, add a JWT_SECRET, add GEMINI_API_KEY
+npm install
+npm run build
+npm start
+```
+
+The SQLite database and local storage directories are created automatically on first startup under `./data/`.
+
+### Setup with Supabase
+
+1. Set `DB_SOURCE=supabase` in `.env` (or omit it — supabase is the default)
+2. Fill in `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`
+3. Run the SQL migration in `supabase/migrations/001_initial_schema.sql` in your Supabase SQL editor
 
 ## Development
 
@@ -36,36 +53,33 @@ EyeMix is a full-stack Progressive Web App that merges two iris photos using AI 
 npm run dev
 ```
 
-This runs both the backend (nodemon) and frontend (Vite) concurrently.
+This runs both the backend (nodemon on port 3000) and frontend (Vite on port 5173) concurrently.
+
+```bash
+npm test            # Run server tests
+npm run test:watch  # Watch mode
+```
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `SUPABASE_URL` | Your Supabase project URL |
-| `SUPABASE_ANON_KEY` | Supabase anonymous key |
-| `SUPABASE_SERVICE_KEY` | Supabase service role key (admin) |
-| `NANOBANANA_API_KEY` | NanoBanana AI API key |
-| `NANOBANANA_API_URL` | NanoBanana API endpoint |
+| `DB_SOURCE` | `supabase` (default) or `sqlite` |
+| `SUPABASE_URL` | Supabase project URL (when using supabase) |
+| `SUPABASE_ANON_KEY` | Supabase anonymous key (when using supabase) |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key (when using supabase) |
+| `SQLITE_DB_PATH` | Custom SQLite path (default: `./data/eyemix.sqlite`) |
+| `GEMINI_API_KEY` | Google AI Studio API key |
 | `JWT_SECRET` | Secret for JWT signing (min 32 chars) |
 | `CLIENT_PAYWALL_PASSWORD` | Password clients enter to unlock results |
 | `PORT` | Server port (default: 3000) |
-
-## Database Setup
-
-Run the SQL migration in `supabase/migrations/001_initial_schema.sql` in your Supabase project SQL editor.
 
 ## User Roles
 
 - **Admin**: Full access to manage templates, couples, and generate merges
 - **Client**: View-only access to their assigned couples (after entering paywall password)
 
-## Deployment to Replit
-
-1. Import this repo on Replit
-2. Add all environment variables in Replit Secrets
-3. Run `npm run build` to build the frontend
-4. Click Run — the app starts with `npm start`
+On first run, visit the app and create the initial admin account — this bootstraps the system.
 
 ## Product Mockups
 
