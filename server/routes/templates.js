@@ -1,9 +1,9 @@
 const express = require('express');
-const { supabaseAdmin } = require('../services/supabase');
+const { promptTemplates } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { templateValidation } = require('../utils/validation');
 const nanoBanana = require('../services/nanoBanana');
-const { uploadImage, BUCKETS } = require('../services/storage');
+const { uploadImage, BUCKETS } = require('../services/storageFactory');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
@@ -11,24 +11,9 @@ const router = express.Router();
 // GET /api/templates — List all active templates
 router.get('/', requireAuth, async (req, res) => {
   try {
-    let query = supabaseAdmin
-      .from('prompt_templates')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    // Non-admins only see active templates
-    if (req.user.role !== 'admin') {
-      query = query.eq('is_active', true);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error('Templates list error:', error);
-      return res.status(500).json({ error: 'Failed to fetch templates' });
-    }
-
-    res.json({ templates: data || [] });
+    const activeOnly = req.user.role !== 'admin';
+    const data = await promptTemplates.findAll({ activeOnly });
+    res.json({ templates: data });
   } catch (err) {
     console.error('Templates list handler error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -40,16 +25,7 @@ router.post('/', requireAdmin, templateValidation.create, async (req, res) => {
   try {
     const { name, description, prompt_text, category, is_active = true } = req.body;
 
-    const { data: template, error } = await supabaseAdmin
-      .from('prompt_templates')
-      .insert({ name, description, prompt_text, category, is_active })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Template create error:', error);
-      return res.status(500).json({ error: 'Failed to create template' });
-    }
+    const template = await promptTemplates.create({ name, description, prompt_text, category, is_active });
 
     res.status(201).json({ template });
   } catch (err) {
@@ -71,17 +47,7 @@ router.put('/:id', requireAdmin, templateValidation.update, async (req, res) => 
     if (category !== undefined) updates.category = category;
     if (is_active !== undefined) updates.is_active = is_active;
 
-    const { data: template, error } = await supabaseAdmin
-      .from('prompt_templates')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Template update error:', error);
-      return res.status(500).json({ error: 'Failed to update template' });
-    }
+    const template = await promptTemplates.update(id, updates);
 
     if (!template) {
       return res.status(404).json({ error: 'Template not found' });
@@ -99,15 +65,7 @@ router.delete('/:id', requireAdmin, templateValidation.idParam, async (req, res)
   try {
     const { id } = req.params;
 
-    const { error } = await supabaseAdmin
-      .from('prompt_templates')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      console.error('Template delete error:', error);
-      return res.status(500).json({ error: 'Failed to delete template' });
-    }
+    await promptTemplates.delete(id);
 
     res.json({ message: 'Template deleted successfully' });
   } catch (err) {
@@ -122,13 +80,9 @@ router.post('/:id/reference', requireAdmin, templateValidation.idParam, async (r
     const { id } = req.params;
 
     // Fetch template
-    const { data: template, error: fetchError } = await supabaseAdmin
-      .from('prompt_templates')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const template = await promptTemplates.findById(id);
 
-    if (fetchError || !template) {
+    if (!template) {
       return res.status(404).json({ error: 'Template not found' });
     }
 
@@ -152,15 +106,10 @@ router.post('/:id/reference', requireAdmin, templateValidation.idParam, async (r
     }
 
     // Update template with reference image URL
-    const { data: updatedTemplate, error: updateError } = await supabaseAdmin
-      .from('prompt_templates')
-      .update({ reference_image_url: publicUrl })
-      .eq('id', id)
-      .select()
-      .single();
+    const updatedTemplate = await promptTemplates.update(id, { reference_image_url: publicUrl });
 
-    if (updateError) {
-      console.error('Template reference URL update error:', updateError);
+    if (!updatedTemplate) {
+      console.error('Template reference URL update error: template not found after update');
       return res.status(500).json({ error: 'Failed to update template reference URL' });
     }
 

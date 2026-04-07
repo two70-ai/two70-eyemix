@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { supabaseAdmin } = require('../services/supabase');
+const { users } = require('../db');
 const { requireAuth, requireAdmin, generateToken, setAuthCookie, clearAuthCookie } = require('../middleware/auth');
 const { authValidation } = require('../utils/validation');
 
@@ -12,12 +12,7 @@ router.post('/register', requireAdmin, authValidation.register, async (req, res)
     const { email, password, role = 'client' } = req.body;
 
     // Check if user already exists
-    const { data: existing } = await supabaseAdmin
-      .from('users')
-      .select('id')
-      .eq('email', email)
-      .single();
-
+    const existing = await users.findByEmail(email);
     if (existing) {
       return res.status(409).json({ error: 'User with this email already exists' });
     }
@@ -27,14 +22,11 @@ router.post('/register', requireAdmin, authValidation.register, async (req, res)
     const password_hash = await bcrypt.hash(password, saltRounds);
 
     // Create user
-    const { data: newUser, error } = await supabaseAdmin
-      .from('users')
-      .insert({ email, password_hash, role })
-      .select('id, email, role, created_at')
-      .single();
-
-    if (error) {
-      console.error('Register error:', error);
+    let newUser;
+    try {
+      newUser = await users.create({ email, password_hash, role });
+    } catch (err) {
+      console.error('Register error:', err);
       return res.status(500).json({ error: 'Failed to create user' });
     }
 
@@ -51,13 +43,8 @@ router.post('/login', authValidation.login, async (req, res) => {
     const { email, password } = req.body;
 
     // Find user
-    const { data: user, error } = await supabaseAdmin
-      .from('users')
-      .select('id, email, password_hash, role, created_at')
-      .eq('email', email)
-      .single();
-
-    if (error || !user) {
+    const user = await users.findByEmail(email);
+    if (!user) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
@@ -106,13 +93,7 @@ router.post('/first-admin', async (req, res) => {
     }
 
     // Check if any users exist
-    const { count, error: countError } = await supabaseAdmin
-      .from('users')
-      .select('*', { count: 'exact', head: true });
-
-    if (countError) {
-      return res.status(500).json({ error: 'Database error' });
-    }
+    const count = await users.count();
 
     if (count > 0) {
       return res.status(403).json({ error: 'Admin already exists. Use login instead.' });
@@ -122,14 +103,11 @@ router.post('/first-admin', async (req, res) => {
     const saltRounds = 12;
     const password_hash = await bcrypt.hash(password, saltRounds);
 
-    const { data: newAdmin, error } = await supabaseAdmin
-      .from('users')
-      .insert({ email, password_hash, role: 'admin' })
-      .select('id, email, role, created_at')
-      .single();
-
-    if (error) {
-      console.error('First admin creation error:', error);
+    let newAdmin;
+    try {
+      newAdmin = await users.create({ email, password_hash, role: 'admin' });
+    } catch (err) {
+      console.error('First admin creation error:', err);
       return res.status(500).json({ error: 'Failed to create admin' });
     }
 

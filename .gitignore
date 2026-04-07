@@ -32,6 +32,9 @@ Thumbs.db
 tmp/
 temp/
 
+# Local SQLite data
+data/
+
 # Coverage
 coverage/
 

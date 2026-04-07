@@ -1,5 +1,5 @@
 const express = require('express');
-const { supabaseAdmin } = require('../services/supabase');
+const { couples, clientAccess, users } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { coupleValidation } = require('../utils/validation');
 
@@ -8,35 +8,21 @@ const router = express.Router();
 // GET /api/couples — List couples
 router.get('/', requireAuth, async (req, res) => {
   try {
-    let query = supabaseAdmin
-      .from('couples')
-      .select('*, users!couples_created_by_fkey(email)')
-      .order('created_at', { ascending: false });
-
     // Clients only see their own couples via client_access table
     if (req.user.role === 'client') {
-      const { data: accessRows } = await supabaseAdmin
-        .from('client_access')
-        .select('couple_id')
-        .eq('client_user_id', req.user.id);
-
-      const coupleIds = (accessRows || []).map((r) => r.couple_id);
+      const coupleIds = await clientAccess.findCoupleIdsByClient(req.user.id);
 
       if (coupleIds.length === 0) {
         return res.json({ couples: [] });
       }
 
-      query = query.in('id', coupleIds);
+      const data = await couples.findAllByIds(coupleIds);
+      return res.json({ couples: data });
     }
 
-    const { data, error } = await query;
-
-    if (error) {
-      console.error('Couples list error:', error);
-      return res.status(500).json({ error: 'Failed to fetch couples' });
-    }
-
-    res.json({ couples: data || [] });
+    // Admin path: return all couples
+    const data = await couples.findAll();
+    res.json({ couples: data });
   } catch (err) {
     console.error('Couples list handler error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -48,33 +34,20 @@ router.post('/', requireAdmin, coupleValidation.create, async (req, res) => {
   try {
     const { person_a_name, person_b_name, client_user_id } = req.body;
 
-    const { data: couple, error } = await supabaseAdmin
-      .from('couples')
-      .insert({
-        person_a_name,
-        person_b_name,
-        created_by: req.user.id,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Couple create error:', error);
+    let couple;
+    try {
+      couple = await couples.create({ person_a_name, person_b_name, created_by: req.user.id });
+    } catch (err) {
+      console.error('Couple create error:', err);
       return res.status(500).json({ error: 'Failed to create couple' });
     }
 
     // Optionally link to a client user
     if (client_user_id) {
-      const { error: accessError } = await supabaseAdmin
-        .from('client_access')
-        .insert({
-          client_user_id,
-          couple_id: couple.id,
-          paywall_unlocked: false,
-        });
-
-      if (accessError) {
-        console.warn('Failed to create client_access record:', accessError);
+      try {
+        await clientAccess.create({ client_user_id, couple_id: couple.id, paywall_unlocked: false });
+      } catch (err) {
+        console.warn('Failed to create client_access record:', err);
       }
     }
 
@@ -92,36 +65,22 @@ router.get('/:id', requireAuth, coupleValidation.idParam, async (req, res) => {
 
     // Client: verify they have access
     if (req.user.role === 'client') {
-      const { data: access } = await supabaseAdmin
-        .from('client_access')
-        .select('couple_id, paywall_unlocked')
-        .eq('client_user_id', req.user.id)
-        .eq('couple_id', id)
-        .single();
+      const access = await clientAccess.findByClientAndCouple(req.user.id, id);
 
       if (!access) {
         return res.status(403).json({ error: 'Access denied to this couple' });
       }
     }
 
-    const { data: couple, error } = await supabaseAdmin
-      .from('couples')
-      .select('*, users!couples_created_by_fkey(email)')
-      .eq('id', id)
-      .single();
+    const couple = await couples.findById(id);
 
-    if (error || !couple) {
+    if (!couple) {
       return res.status(404).json({ error: 'Couple not found' });
     }
 
     // Attach access info for clients
     if (req.user.role === 'client') {
-      const { data: access } = await supabaseAdmin
-        .from('client_access')
-        .select('paywall_unlocked, unlocked_at')
-        .eq('client_user_id', req.user.id)
-        .eq('couple_id', id)
-        .single();
+      const access = await clientAccess.findByClientAndCouple(req.user.id, id);
       couple.client_access = access;
     }
 
@@ -138,24 +97,17 @@ router.delete('/:id', requireAdmin, coupleValidation.idParam, async (req, res) =
     const { id } = req.params;
 
     // Check couple exists
-    const { data: couple } = await supabaseAdmin
-      .from('couples')
-      .select('id')
-      .eq('id', id)
-      .single();
+    const couple = await couples.findByIdSimple(id);
 
     if (!couple) {
       return res.status(404).json({ error: 'Couple not found' });
     }
 
     // Delete cascades to merges and client_access via DB foreign keys
-    const { error } = await supabaseAdmin
-      .from('couples')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      console.error('Couple delete error:', error);
+    try {
+      await couples.delete(id);
+    } catch (err) {
+      console.error('Couple delete error:', err);
       return res.status(500).json({ error: 'Failed to delete couple' });
     }
 
@@ -177,25 +129,18 @@ router.post('/:id/access', requireAdmin, coupleValidation.idParam, async (req, r
     }
 
     // Verify couple exists
-    const { data: couple } = await supabaseAdmin.from('couples').select('id').eq('id', id).single();
+    const couple = await couples.findByIdSimple(id);
     if (!couple) return res.status(404).json({ error: 'Couple not found' });
 
     // Verify client user exists and is a client
-    const { data: clientUser } = await supabaseAdmin
-      .from('users')
-      .select('id, role')
-      .eq('id', client_user_id)
-      .eq('role', 'client')
-      .single();
+    const clientUser = await users.findByIdAndRole(client_user_id, 'client');
     if (!clientUser) return res.status(404).json({ error: 'Client user not found' });
 
-    const { data: access, error } = await supabaseAdmin
-      .from('client_access')
-      .upsert({ client_user_id, couple_id: id, paywall_unlocked: false }, { onConflict: 'client_user_id,couple_id' })
-      .select()
-      .single();
-
-    if (error) {
+    let access;
+    try {
+      access = await clientAccess.upsert({ client_user_id, couple_id: id, paywall_unlocked: false });
+    } catch (err) {
+      console.error('Grant access upsert error:', err);
       return res.status(500).json({ error: 'Failed to grant access' });
     }
 

@@ -1,7 +1,7 @@
 const express = require('express');
-const { supabaseAdmin } = require('../services/supabase');
+const { merges } = require('../db');
 const { requireAdmin } = require('../middleware/auth');
-const { listOldImages, deleteImages, extractFilenameFromUrl, BUCKETS } = require('../services/storage');
+const { listOldImages, deleteImages, extractFilenameFromUrl, BUCKETS } = require('../services/storageFactory');
 
 const router = express.Router();
 
@@ -21,65 +21,59 @@ router.post('/', requireAdmin, async (req, res) => {
     const cutoffISO = cutoffDate.toISOString();
 
     // Find old completed/failed merges
-    const { data: oldMerges, error: mergesError } = await supabaseAdmin
-      .from('merges')
-      .select('id, iris_a_url, iris_b_url, result_image_url, status')
-      .lt('created_at', cutoffISO)
-      .in('status', ['completed', 'failed']);
+    try {
+      const oldMerges = await merges.findOlderThan(cutoffISO, ['completed', 'failed']);
 
-    if (mergesError) {
-      results.errors.push(`Failed to query old merges: ${mergesError.message}`);
-    } else if (oldMerges && oldMerges.length > 0) {
-      // Collect all storage filenames to delete
-      const irisUploadsToDelete = [];
-      const resultImagesToDelete = [];
+      if (oldMerges && oldMerges.length > 0) {
+        // Collect all storage filenames to delete
+        const irisUploadsToDelete = [];
+        const resultImagesToDelete = [];
 
-      for (const merge of oldMerges) {
-        if (merge.iris_a_url) {
-          const filename = extractFilenameFromUrl(merge.iris_a_url, BUCKETS.IRIS_UPLOADS);
-          if (filename) irisUploadsToDelete.push(filename);
+        for (const merge of oldMerges) {
+          if (merge.iris_a_url) {
+            const filename = extractFilenameFromUrl(merge.iris_a_url, BUCKETS.IRIS_UPLOADS);
+            if (filename) irisUploadsToDelete.push(filename);
+          }
+          if (merge.iris_b_url) {
+            const filename = extractFilenameFromUrl(merge.iris_b_url, BUCKETS.IRIS_UPLOADS);
+            if (filename) irisUploadsToDelete.push(filename);
+          }
+          if (merge.result_image_url) {
+            const filename = extractFilenameFromUrl(merge.result_image_url, BUCKETS.GENERATED_RESULTS);
+            if (filename) resultImagesToDelete.push(filename);
+          }
         }
-        if (merge.iris_b_url) {
-          const filename = extractFilenameFromUrl(merge.iris_b_url, BUCKETS.IRIS_UPLOADS);
-          if (filename) irisUploadsToDelete.push(filename);
+
+        // Delete from storage
+        try {
+          if (irisUploadsToDelete.length > 0) {
+            await deleteImages(BUCKETS.IRIS_UPLOADS, irisUploadsToDelete);
+            results.deleted_files.push(...irisUploadsToDelete.map((f) => `${BUCKETS.IRIS_UPLOADS}/${f}`));
+          }
+        } catch (err) {
+          results.errors.push(`Iris uploads delete error: ${err.message}`);
         }
-        if (merge.result_image_url) {
-          const filename = extractFilenameFromUrl(merge.result_image_url, BUCKETS.GENERATED_RESULTS);
-          if (filename) resultImagesToDelete.push(filename);
+
+        try {
+          if (resultImagesToDelete.length > 0) {
+            await deleteImages(BUCKETS.GENERATED_RESULTS, resultImagesToDelete);
+            results.deleted_files.push(...resultImagesToDelete.map((f) => `${BUCKETS.GENERATED_RESULTS}/${f}`));
+          }
+        } catch (err) {
+          results.errors.push(`Result images delete error: ${err.message}`);
+        }
+
+        // Delete merge records from DB
+        const mergeIds = oldMerges.map((m) => m.id);
+        try {
+          await merges.deleteByIds(mergeIds);
+          results.deleted_merges = mergeIds.length;
+        } catch (err) {
+          results.errors.push(`Failed to delete merge records: ${err.message}`);
         }
       }
-
-      // Delete from storage
-      try {
-        if (irisUploadsToDelete.length > 0) {
-          await deleteImages(BUCKETS.IRIS_UPLOADS, irisUploadsToDelete);
-          results.deleted_files.push(...irisUploadsToDelete.map((f) => `${BUCKETS.IRIS_UPLOADS}/${f}`));
-        }
-      } catch (err) {
-        results.errors.push(`Iris uploads delete error: ${err.message}`);
-      }
-
-      try {
-        if (resultImagesToDelete.length > 0) {
-          await deleteImages(BUCKETS.GENERATED_RESULTS, resultImagesToDelete);
-          results.deleted_files.push(...resultImagesToDelete.map((f) => `${BUCKETS.GENERATED_RESULTS}/${f}`));
-        }
-      } catch (err) {
-        results.errors.push(`Result images delete error: ${err.message}`);
-      }
-
-      // Delete merge records from DB
-      const mergeIds = oldMerges.map((m) => m.id);
-      const { error: deleteMergesError } = await supabaseAdmin
-        .from('merges')
-        .delete()
-        .in('id', mergeIds);
-
-      if (deleteMergesError) {
-        results.errors.push(`Failed to delete merge records: ${deleteMergesError.message}`);
-      } else {
-        results.deleted_merges = mergeIds.length;
-      }
+    } catch (err) {
+      results.errors.push(`Failed to query old merges: ${err.message}`);
     }
 
     // Clean up old reference images from storage (not linked to DB records directly)
@@ -116,14 +110,8 @@ router.get('/stats', requireAdmin, async (req, res) => {
     cutoffDate.setDate(cutoffDate.getDate() - daysOld);
     const cutoffISO = cutoffDate.toISOString();
 
-    const { count: oldMergesCount } = await supabaseAdmin
-      .from('merges')
-      .select('*', { count: 'exact', head: true })
-      .lt('created_at', cutoffISO);
-
-    const { count: totalMergesCount } = await supabaseAdmin
-      .from('merges')
-      .select('*', { count: 'exact', head: true });
+    const oldMergesCount = await merges.countOlderThan(cutoffISO);
+    const totalMergesCount = await merges.countAll();
 
     res.json({
       cutoff_date: cutoffISO,

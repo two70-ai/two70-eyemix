@@ -4,6 +4,9 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 
+const { initialize: initializeDb } = require('./db');
+const { ensureBucketsExist } = require('./services/storageFactory');
+
 const authRoutes = require('./routes/auth');
 const couplesRoutes = require('./routes/couples');
 const templatesRoutes = require('./routes/templates');
@@ -28,6 +31,12 @@ app.use(cors(corsOptions));
 app.use(cookieParser());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Serve local storage files when using SQLite backend
+if ((process.env.DB_SOURCE || '').toLowerCase() === 'sqlite') {
+  const storageServe = require('./routes/storageServe');
+  app.use('/api/storage', storageServe);
+}
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -69,9 +78,21 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: message });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`EyeMix server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+// Initialize database and storage, then start listening
+(async () => {
+  try {
+    await initializeDb();
+    await ensureBucketsExist();
+    console.log(`Database: ${process.env.DB_SOURCE || 'supabase'}`);
+  } catch (err) {
+    console.error('Startup initialization error:', err);
+    process.exit(1);
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`EyeMix server running on port ${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  });
+})();
 
 module.exports = app;

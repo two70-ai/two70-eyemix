@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { supabaseAdmin } = require('../services/supabase');
+const { users } = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-change-in-production';
 
@@ -25,13 +25,8 @@ async function requireAuth(req, res, next) {
     }
 
     // Fetch fresh user data from database
-    const { data: user, error } = await supabaseAdmin
-      .from('users')
-      .select('id, email, role, created_at')
-      .eq('id', decoded.userId)
-      .single();
-
-    if (error || !user) {
+    const user = await users.findById(decoded.userId);
+    if (!user) {
       return res.status(401).json({ error: 'User not found' });
     }
 

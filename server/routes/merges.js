@@ -1,10 +1,10 @@
 const express = require('express');
-const { supabaseAdmin } = require('../services/supabase');
+const { merges, couples, promptTemplates, clientAccess } = require('../db');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { mergeValidation } = require('../utils/validation');
 const { upload, handleUploadError } = require('../middleware/upload');
 const nanoBanana = require('../services/nanoBanana');
-const { uploadImage, BUCKETS } = require('../services/storage');
+const { uploadImage, BUCKETS } = require('../services/storageFactory');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
@@ -12,41 +12,21 @@ const router = express.Router();
 // GET /api/merges — List merges
 router.get('/', requireAuth, async (req, res) => {
   try {
-    let query = supabaseAdmin
-      .from('merges')
-      .select(`
-        *,
-        couples(id, person_a_name, person_b_name),
-        prompt_templates(id, name, category)
-      `)
-      .order('created_at', { ascending: false });
-
     if (req.user.role === 'client') {
-      // Get couples this client has access to
-      const { data: accessRows } = await supabaseAdmin
-        .from('client_access')
-        .select('couple_id, paywall_unlocked')
-        .eq('client_user_id', req.user.id);
-
-      const unlockedCoupleIds = (accessRows || [])
-        .filter((r) => r.paywall_unlocked)
-        .map((r) => r.couple_id);
+      // Get couples this client has unlocked access to
+      const unlockedCoupleIds = await clientAccess.findUnlockedCoupleIdsByClient(req.user.id);
 
       if (unlockedCoupleIds.length === 0) {
         return res.json({ merges: [] });
       }
 
-      query = query.in('couple_id', unlockedCoupleIds);
+      const data = await merges.findAllByCoupleIds(unlockedCoupleIds);
+      return res.json({ merges: data });
     }
 
-    const { data, error } = await query;
-
-    if (error) {
-      console.error('Merges list error:', error);
-      return res.status(500).json({ error: 'Failed to fetch merges' });
-    }
-
-    res.json({ merges: data || [] });
+    // Admin/staff: return all merges
+    const data = await merges.findAll();
+    res.json({ merges: data });
   } catch (err) {
     console.error('Merges list handler error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -76,25 +56,16 @@ router.post(
       const irisBFile = files.iris_b[0];
 
       // Verify couple exists
-      const { data: couple, error: coupleError } = await supabaseAdmin
-        .from('couples')
-        .select('id, person_a_name, person_b_name')
-        .eq('id', couple_id)
-        .single();
+      const couple = await couples.findByIdSimple(couple_id);
 
-      if (coupleError || !couple) {
+      if (!couple) {
         return res.status(404).json({ error: 'Couple not found' });
       }
 
       // Verify template exists and is active
-      const { data: template, error: templateError } = await supabaseAdmin
-        .from('prompt_templates')
-        .select('id, name, prompt_text')
-        .eq('id', template_id)
-        .eq('is_active', true)
-        .single();
+      const template = await promptTemplates.findByIdActive(template_id);
 
-      if (templateError || !template) {
+      if (!template) {
         return res.status(404).json({ error: 'Template not found or inactive' });
       }
 
@@ -118,25 +89,16 @@ router.post(
       const fullPrompt = nanoBanana.buildIrisPrompt(template.prompt_text);
 
       // Create merge record with pending status
-      const { data: merge, error: mergeCreateError } = await supabaseAdmin
-        .from('merges')
-        .insert({
-          id: mergeId,
-          couple_id,
-          template_id,
-          iris_a_url: irisAUrl,
-          iris_b_url: irisBUrl,
-          prompt_used: fullPrompt,
-          status: 'pending',
-          created_by: req.user.id,
-        })
-        .select()
-        .single();
-
-      if (mergeCreateError) {
-        console.error('Merge record create error:', mergeCreateError);
-        return res.status(500).json({ error: 'Failed to create merge record' });
-      }
+      const merge = await merges.create({
+        id: mergeId,
+        couple_id,
+        template_id,
+        iris_a_url: irisAUrl,
+        iris_b_url: irisBUrl,
+        prompt_used: fullPrompt,
+        status: 'pending',
+        created_by: req.user.id,
+      });
 
       // Call NanoBanana AI to generate merged iris
       let resultImageBuffer;
@@ -148,10 +110,7 @@ router.post(
       } catch (genError) {
         console.error('NanoBanana generation error:', genError);
         // Update merge status to failed
-        await supabaseAdmin
-          .from('merges')
-          .update({ status: 'failed' })
-          .eq('id', mergeId);
+        await merges.update(mergeId, { status: 'failed' });
         return res.status(502).json({ error: `AI generation failed: ${genError.message}` });
       }
 
@@ -162,26 +121,15 @@ router.post(
         resultUrl = await uploadImage(BUCKETS.GENERATED_RESULTS, resultFilename, resultImageBuffer, 'image/png');
       } catch (uploadErr) {
         console.error('Result upload error:', uploadErr);
-        await supabaseAdmin.from('merges').update({ status: 'failed' }).eq('id', mergeId);
+        await merges.update(mergeId, { status: 'failed' });
         return res.status(500).json({ error: 'Failed to store result image' });
       }
 
       // Update merge record with result
-      const { data: updatedMerge, error: updateError } = await supabaseAdmin
-        .from('merges')
-        .update({ result_image_url: resultUrl, status: 'completed' })
-        .eq('id', mergeId)
-        .select(`
-          *,
-          couples(id, person_a_name, person_b_name),
-          prompt_templates(id, name, category)
-        `)
-        .single();
-
-      if (updateError) {
-        console.error('Merge update error:', updateError);
-        return res.status(500).json({ error: 'Failed to update merge record' });
-      }
+      const updatedMerge = await merges.updateWithJoins(mergeId, {
+        result_image_url: resultUrl,
+        status: 'completed',
+      });
 
       res.status(201).json({ merge: updatedMerge });
     } catch (err) {
@@ -196,28 +144,15 @@ router.get('/:id', requireAuth, mergeValidation.idParam, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data: merge, error } = await supabaseAdmin
-      .from('merges')
-      .select(`
-        *,
-        couples(id, person_a_name, person_b_name),
-        prompt_templates(id, name, category, description)
-      `)
-      .eq('id', id)
-      .single();
+    const merge = await merges.findById(id);
 
-    if (error || !merge) {
+    if (!merge) {
       return res.status(404).json({ error: 'Merge not found' });
     }
 
     // Client access check
     if (req.user.role === 'client') {
-      const { data: access } = await supabaseAdmin
-        .from('client_access')
-        .select('paywall_unlocked')
-        .eq('client_user_id', req.user.id)
-        .eq('couple_id', merge.couple_id)
-        .single();
+      const access = await clientAccess.findByClientAndCouple(req.user.id, merge.couple_id);
 
       if (!access) {
         return res.status(403).json({ error: 'Access denied' });
@@ -240,15 +175,7 @@ router.delete('/:id', requireAdmin, mergeValidation.idParam, async (req, res) =>
   try {
     const { id } = req.params;
 
-    const { error } = await supabaseAdmin
-      .from('merges')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      console.error('Merge delete error:', error);
-      return res.status(500).json({ error: 'Failed to delete merge' });
-    }
+    await merges.delete(id);
 
     res.json({ message: 'Merge deleted successfully' });
   } catch (err) {
